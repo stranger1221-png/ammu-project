@@ -41,6 +41,7 @@ else:
         db = client[db_name]
         logger.info(f"MongoDB client initialized for database: {db_name} (using certifi)")
     except Exception as e:
+        db_error = str(e)
         logger.error(f"Failed to initialize MongoDB client: {e}")
         db = None
 
@@ -250,10 +251,12 @@ async def call_gemini(system_message: str, user_message: str) -> str:
 # Auth endpoints
 # ========================================================================
 
+db_error = None
+
 @api_router.post("/auth/register")
 async def register(body: RegisterIn, request: Request):
     if db is None:
-        raise HTTPException(503, "Database connection is not available. Check your MONGO_URI.")
+        raise HTTPException(503, f"Database connection is not available. Error: {db_error or 'Unknown error'}. Check your MONGO_URI.")
     email = body.email.lower().strip()
     if len(body.password) < 6:
         raise HTTPException(400, "Password must be at least 6 characters")
