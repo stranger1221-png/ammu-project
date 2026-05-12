@@ -21,11 +21,14 @@ from datetime import datetime, timezone, timedelta
 
 ROOT_DIR = Path(__file__).parent
 
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
+if not mongo_url:
+    raise RuntimeError("MONGO_URI or MONGO_URL must be set")
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db_name = os.environ.get('DB_NAME', 'genvo_db')
+db = client[db_name]
 
-GEMINI_API_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')
 GEMINI_MODEL = "gemini-3-flash-preview"
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
