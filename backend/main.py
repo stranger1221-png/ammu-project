@@ -239,7 +239,7 @@ async def call_gemini(system_message: str, user_message: str) -> str:
     
     payload = {
         "contents": [{"role": "user", "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]}],
-        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.7}
+        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.7}
     }
     
     import asyncio
