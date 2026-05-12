@@ -24,6 +24,9 @@ ROOT_DIR = Path(__file__).parent
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("genvo")
 
+# Debug: Log all available env var keys (not values) to help diagnose Vercel issues
+logger.info(f"Available Environment Keys: {list(os.environ.keys())}")
+
 db = None
 mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
 
