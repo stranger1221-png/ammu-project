@@ -4,7 +4,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "/_/backend";
 export const API = `${BACKEND_URL}/api`;
 
 const AuthCtx = createContext(null);
