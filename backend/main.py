@@ -237,22 +237,46 @@ async def call_gemini(system_message: str, user_message: str) -> str:
     # Using confirmed available model gemini-2.0-flash on v1 endpoint
     url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
+    import asyncio
+    
+    # Modern payload structure using official system_instruction field
+    # (Recommended for Gemini 2.0/2.5 models)
     payload = {
-        "contents": [{"role": "user", "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]}],
-        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.7}
+        "system_instruction": {
+            "parts": [{"text": system_message}]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": user_message}]
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 800,
+            "temperature": 0.7
+        }
     }
     
-    import asyncio
     max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for attempt in range(max_retries):
+            try:
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
                 
-                # Retry on Rate Limit (429) or Server Issues (503, 504)
-                if resp.status_code in [429, 503, 504]:
+                # If the model doesn't support system_instruction (returns 400), 
+                # fallback to the role-based prompt
+                if resp.status_code == 400 and "system_instruction" in resp.text:
+                    logger.warning("Model does not support system_instruction, falling back to role-prefix")
+                    legacy_payload = {
+                        "contents": [{"role": "user", "parts": [{"text": f"SYSTEM: {system_message}\n\nUSER: {user_message}"}]}],
+                        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.7}
+                    }
+                    resp = await client.post(url, headers={"Content-Type": "application/json"}, json=legacy_payload)
+
+                # Handle transient errors (429, 500, 503, 504)
+                if resp.status_code in [429, 500, 503, 504]:
                     wait_time = (attempt + 1) * 5
-                    logger.warning(f"Gemini temporary error ({resp.status_code}). Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+                    logger.warning(f"Gemini error {resp.status_code}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
                     await asyncio.sleep(wait_time)
                     continue
 
@@ -261,16 +285,25 @@ async def call_gemini(system_message: str, user_message: str) -> str:
                     raise HTTPException(503, f"Gemini API error: {resp.status_code}")
                 
                 data = resp.json()
+                
+                # Robust response parsing
+                if "candidates" not in data or not data["candidates"]:
+                    if "promptFeedback" in data:
+                        return "I'm sorry, I can't help with that specific request. (Prompt blocked by safety filters)"
+                    raise ValueError("No candidates in response")
+                
                 return data["candidates"][0]["content"]["parts"][0]["text"]
-        except httpx.TimeoutException:
-            if attempt < max_retries - 1: continue
-            raise HTTPException(504, "Gemini API timed out")
-        except Exception as e:
-            if isinstance(e, HTTPException): raise
-            logger.exception("Unexpected error calling Gemini")
-            raise HTTPException(500, f"Internal AI error: {str(e)}")
 
-    raise HTTPException(429, "Too many requests to AI. Please wait a moment and try again.")
+            except httpx.TimeoutException:
+                if attempt < max_retries - 1: continue
+                raise HTTPException(504, "Gemini API timed out")
+            except Exception as e:
+                if isinstance(e, HTTPException): raise
+                logger.exception("Unexpected error calling Gemini")
+                if attempt < max_retries - 1: continue
+                raise HTTPException(500, f"Internal AI error: {str(e)}")
+
+    raise HTTPException(503, "Gemini API failed after multiple retries.")
 
 
 # ========================================================================
