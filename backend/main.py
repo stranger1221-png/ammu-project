@@ -55,7 +55,7 @@ else:
     logger.info("Gemini API key found (prefix: %s...)", GEMINI_API_KEY[:6])
 
 # Use a model id your API key can call (see Google AI Studio / listModels). Override with GEMINI_MODEL.
-GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-3-flash-preview").strip()
 
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
@@ -319,7 +319,7 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
                             429,
                             "Gemini API rate limit or free-tier quota exceeded. "
                             "Wait a minute, reduce how often you call AI, enable billing for higher limits, "
-                            "or set GEMINI_MODEL to another model (e.g. gemini-2.0-flash) for a separate quota pool. "
+                            "or set GEMINI_MODEL to another model (e.g. gemini-2.5-flash) for a separate quota pool. "
                             f"Details: {last_transient_body[:600]}",
                         )
                     raise HTTPException(
