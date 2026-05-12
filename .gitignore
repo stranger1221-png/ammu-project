@@ -30,8 +30,10 @@ next-env.d.ts
 dist/
 dist
 
-# Environment files (comprehensive coverage)
-
+# Environment files
+.env
+.env.local
+*.env*
 *token.json*
 *credentials.json*
 
