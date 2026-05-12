@@ -56,6 +56,26 @@ else:
 
 GEMINI_MODEL = "gemini-1.5-flash" # Changed to a standard stable model name
 
+@api_router.get("/debug/models")
+async def debug_models():
+    """Diagnostic endpoint to see what models your key can actually access."""
+    if not GEMINI_API_KEY:
+        return {"error": "No API key configured"}
+    
+    urls = [
+        f"https://generativelanguage.googleapis.com/v1/models?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    ]
+    results = {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for url in urls:
+            try:
+                resp = await client.get(url)
+                results[url.split("/")[3]] = resp.json()
+            except Exception as e:
+                results[url.split("/")[3]] = str(e)
+    return results
+
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
 JWT_ALG = "HS256"
 ACCESS_TTL_MIN = 60          # access token lifetime
