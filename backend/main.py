@@ -27,11 +27,13 @@ logger = logging.getLogger("genvo")
 # Debug: Log all available env var keys (not values) to help diagnose Vercel issues
 logger.info(f"Available Environment Keys: {list(os.environ.keys())}")
 
+db_error = None
 db = None
 mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
 
 if not mongo_url:
-    logger.error("Neither MONGO_URI nor MONGO_URL environment variable is set.")
+    db_error = "MONGO_URI environment variable is missing from Vercel"
+    logger.error(db_error)
 else:
     try:
         import certifi
@@ -251,7 +253,7 @@ async def call_gemini(system_message: str, user_message: str) -> str:
 # Auth endpoints
 # ========================================================================
 
-db_error = None
+
 
 @api_router.post("/auth/register")
 async def register(body: RegisterIn, request: Request):
