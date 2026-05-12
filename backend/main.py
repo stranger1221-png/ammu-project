@@ -215,17 +215,31 @@ class TutorRequest(BaseModel):
 # ========================================================================
 
 def extract_json(text: str) -> dict:
-    cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
+    # First, remove common markdown fencing
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*\n?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip()
+    
+    # Try direct JSON parse
     try:
         return json.loads(cleaned)
-    except Exception:
+    except json.JSONDecodeError:
         pass
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return json.loads(cleaned[start:end + 1])
-    raise ValueError("No JSON in response")
+    
+    # Find and extract JSON object
+    start_idx = cleaned.find("{")
+    end_idx = cleaned.rfind("}")
+    
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        json_str = cleaned[start_idx:end_idx + 1]
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+    
+    # Clear error message with context
+    raise ValueError(f"Could not extract valid JSON from response. Raw text: {text[:200]}")
 
 
 async def call_gemini(system_message: str, user_message: str) -> str:
@@ -249,7 +263,9 @@ async def call_gemini(system_message: str, user_message: str) -> str:
         ],
         "generationConfig": {
             "maxOutputTokens": 800,
-            "temperature": 0.7
+            "temperature": 0.3,
+            "topP": 0.9,
+            "topK": 40
         }
     }
     
@@ -257,17 +273,20 @@ async def call_gemini(system_message: str, user_message: str) -> str:
     async with httpx.AsyncClient(timeout=60.0) as client:
         for attempt in range(max_retries):
             try:
+                logger.info(f"Gemini API call attempt {attempt + 1}/{max_retries} to {GEMINI_MODEL}")
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
                 
+                if resp.status_code != 200:
+                    logger.warning(f"Gemini returned {resp.status_code}: {resp.text[:500]}")
+
                 # Handle transient errors (429, 500, 503, 504)
                 if resp.status_code in [429, 500, 503, 504]:
-                    wait_time = (attempt + 1) * 5
-                    logger.warning(f"Gemini error {resp.status_code}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+                    wait_time = min((2 ** attempt) * 2, 30)  # Exponential, capped at 30s
+                    logger.warning(f"Gemini transient error {resp.status_code}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
                     await asyncio.sleep(wait_time)
                     continue
 
                 if resp.status_code != 200:
-                    logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
                     raise HTTPException(503, f"Gemini API error: {resp.status_code}")
                 
                 data = resp.json()
@@ -278,7 +297,9 @@ async def call_gemini(system_message: str, user_message: str) -> str:
                         return "I'm sorry, I can't help with that specific request. (Prompt blocked by safety filters)"
                     raise ValueError(f"No candidates in response: {data}")
                 
-                return data["candidates"][0]["content"]["parts"][0]["text"]
+                text_response = data["candidates"][0]["content"]["parts"][0]["text"]
+                logger.info(f"✓ Gemini success on attempt {attempt + 1}")
+                return text_response
 
             except httpx.TimeoutException:
                 if attempt < max_retries - 1: continue
