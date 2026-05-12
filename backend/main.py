@@ -54,7 +54,7 @@ if not GEMINI_API_KEY:
 else:
     logger.info("Gemini API key found (prefix: %s...)", GEMINI_API_KEY[:6])
 
-GEMINI_MODEL = "gemini-2.0-flash-lite"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
