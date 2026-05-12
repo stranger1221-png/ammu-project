@@ -249,9 +249,10 @@ async def call_gemini(system_message: str, user_message: str) -> str:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
                 
-                if resp.status_code == 429:
-                    wait_time = (attempt + 1) * 5 # Wait longer: 5s, 10s, 15s...
-                    logger.warning(f"Rate limited (429). Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+                # Retry on Rate Limit (429) or Server Issues (503, 504)
+                if resp.status_code in [429, 503, 504]:
+                    wait_time = (attempt + 1) * 5
+                    logger.warning(f"Gemini temporary error ({resp.status_code}). Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
                     await asyncio.sleep(wait_time)
                     continue
 
