@@ -232,67 +232,44 @@ async def call_gemini(system_message: str, user_message: str) -> str:
         logger.error("GEMINI_API_KEY is missing")
         raise ValueError("Gemini API key not configured")
 
-    # Using v1 endpoint instead of v1beta for better stability
-    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    # Attempt multiple URL combinations as Gemini endpoints can vary by region/account
+    endpoints = [
+        f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}",
+    ]
     
-    # Mask key for logging
-    masked_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY[:4]}...{GEMINI_API_KEY[-4:]}" if len(GEMINI_API_KEY) > 8 else "URL-with-short-key"
-    logger.info(f"Calling Gemini API: {masked_url}")
-
     payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]
-            }
-        ],
-        "generationConfig": {
-            "maxOutputTokens": 2048,
-            "temperature": 0.7
-        }
+        "contents": [{"role": "user", "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]}],
+        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.7}
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-            )
-            
-            # If 404, try falling back to gemini-pro on v1
-            if resp.status_code == 404 and GEMINI_MODEL != "gemini-pro":
-                logger.warning(f"Model {GEMINI_MODEL} not found on v1, trying gemini-pro fallback")
-                fallback_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-                resp = await client.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload)
-
-            if resp.status_code != 200:
-                logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
-                # If it's still 404, the API key might be the issue or the endpoint version
-                if resp.status_code == 404:
-                    raise HTTPException(503, f"Gemini API endpoint not found (404). Check if your API key has access to v1/models/{GEMINI_MODEL}")
-                raise HTTPException(503, f"Gemini API error: {resp.status_code}")
-                
-            data = resp.json()
+    last_error = ""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for url in endpoints:
             try:
-                # Check for candidates and content
-                if "candidates" not in data or not data["candidates"]:
-                    if "promptFeedback" in data:
-                        logger.warning(f"Gemini blocked prompt: {data['promptFeedback']}")
-                        return "I'm sorry, I can't help with that specific request. (Prompt blocked by safety filters)"
-                    logger.error(f"No candidates in Gemini response: {data}")
-                    raise ValueError("No response from AI")
-                    
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except (KeyError, IndexError) as e:
-                logger.error(f"Failed to parse Gemini response: {e}. Data: {data}")
-                raise ValueError("Failed to parse Gemini response")
-    except httpx.TimeoutException:
-        logger.error("Gemini API timed out")
-        raise HTTPException(504, "Gemini API timed out")
-    except Exception as e:
-        logger.exception("Unexpected error calling Gemini")
-        raise HTTPException(500, f"Internal AI error: {str(e)}")
+                # Mask key for logging
+                masked = url.split("key=")[0] + "key=..."
+                logger.info(f"Trying Gemini endpoint: {masked}")
+                
+                resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                
+                last_error = f"Status {resp.status_code}: {resp.text}"
+                logger.warning(f"Endpoint failed: {masked} -> {last_error}")
+                
+                # If it's a 400 or 403, it might be the payload or key, so don't just loop 404s
+                if resp.status_code in [400, 401, 403]:
+                    break
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"Request failed: {url.split('key=')[0]} -> {e}")
+
+    raise HTTPException(503, f"Gemini API failed after trying multiple endpoints. Last error: {last_error}")
 
 
 # ========================================================================
@@ -679,13 +656,11 @@ async def transcribe_audio(req: TranscribeRequest):
     """Transcribe audio using Gemini multimodal API — no ffmpeg needed, works with WebM from Brave."""
     if not req.audio:
         raise HTTPException(400, "No audio data provided")
-    if not GEMINI_API_KEY:
-        raise HTTPException(500, "Gemini API key not configured")
-
-    url = (
-        f"https://generativelanguage.googleapis.com/v1/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
+    endpoints = [
+        f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
+    ]
+    
     payload = {
         "contents": [{
             "parts": [
@@ -707,25 +682,21 @@ async def transcribe_audio(req: TranscribeRequest):
         "generationConfig": {"maxOutputTokens": 100, "temperature": 0},
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-            )
-            if resp.status_code != 200:
-                logger.error("Gemini transcribe error %s: %s", resp.status_code, resp.text)
-                raise HTTPException(503, f"Gemini API error: {resp.status_code}")
-            data = resp.json()
-            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            transcript = "" if raw.upper() == "SILENT" else raw
-            return {"ok": True, "transcript": transcript}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("transcribe failed")
-        raise HTTPException(500, f"Transcription error: {e}")
+    last_error = ""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for url in endpoints:
+            try:
+                resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    transcript = "" if raw.upper() == "SILENT" else raw
+                    return {"ok": True, "transcript": transcript}
+                last_error = f"Status {resp.status_code}: {resp.text}"
+            except Exception as e:
+                last_error = str(e)
+
+    raise HTTPException(503, f"Transcription failed after trying multiple endpoints. Last error: {last_error}")
 
 app.include_router(api_router)
 
