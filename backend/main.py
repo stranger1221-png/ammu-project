@@ -54,7 +54,8 @@ if not GEMINI_API_KEY:
 else:
     logger.info("Gemini API key found (prefix: %s...)", GEMINI_API_KEY[:6])
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Use a model id your API key can call (see Google AI Studio / listModels). Override with GEMINI_MODEL.
+GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
 
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
@@ -714,6 +715,9 @@ async def transcribe_audio(req: TranscribeRequest):
     """Transcribe audio using Gemini multimodal API — no ffmpeg needed, works with WebM from Brave."""
     if not req.audio:
         raise HTTPException(400, "No audio data provided")
+    if not GEMINI_API_KEY:
+        logger.error("transcribe: GEMINI_API_KEY missing")
+        raise HTTPException(503, "Gemini API key not configured on server")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
@@ -744,9 +748,17 @@ async def transcribe_audio(req: TranscribeRequest):
                 logger.error("Gemini transcribe error %s: %s", resp.status_code, resp.text)
                 raise HTTPException(503, f"Gemini API error: {resp.status_code}")
             data = resp.json()
-            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            if not data.get("candidates"):
+                logger.error("transcribe: no candidates: %s", str(data)[:500])
+                raise HTTPException(503, "Transcription model returned no result")
+            parts = data["candidates"][0].get("content", {}).get("parts") or []
+            if not parts or not parts[0].get("text"):
+                raise HTTPException(503, "Transcription returned empty text")
+            raw = parts[0]["text"].strip()
             transcript = "" if raw.upper() == "SILENT" else raw
             return {"ok": True, "transcript": transcript}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("transcribe failed")
         raise HTTPException(500, f"Transcription error: {str(e)}")

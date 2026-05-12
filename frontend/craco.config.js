@@ -61,6 +61,15 @@ let webpackConfig = {
 };
 
 webpackConfig.devServer = (devServerConfig) => {
+  // Local dev: frontend uses API_BASE "/_/backend/api" (same as Vercel routePrefix). Proxy to FastAPI.
+  devServerConfig.proxy = {
+    "/_/backend": {
+      target: process.env.BACKEND_PROXY_TARGET || "http://127.0.0.1:8000",
+      changeOrigin: true,
+      pathRewrite: { "^/_/backend": "" },
+    },
+  };
+
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
     const originalSetupMiddlewares = devServerConfig.setupMiddlewares;
