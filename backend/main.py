@@ -242,20 +242,34 @@ async def call_gemini(system_message: str, user_message: str) -> str:
         "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.7}
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
-            if resp.status_code != 200:
-                logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
-                raise HTTPException(503, f"Gemini API error: {resp.status_code}")
-            
-            data = resp.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-    except httpx.TimeoutException:
-        raise HTTPException(504, "Gemini API timed out")
-    except Exception as e:
-        logger.exception("Unexpected error calling Gemini")
-        raise HTTPException(500, f"Internal AI error: {str(e)}")
+    import asyncio
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+                
+                if resp.status_code == 429:
+                    wait_time = (attempt + 1) * 2
+                    logger.warning(f"Rate limited (429). Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                if resp.status_code != 200:
+                    logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
+                    raise HTTPException(503, f"Gemini API error: {resp.status_code}")
+                
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1: continue
+            raise HTTPException(504, "Gemini API timed out")
+        except Exception as e:
+            if isinstance(e, HTTPException): raise
+            logger.exception("Unexpected error calling Gemini")
+            raise HTTPException(500, f"Internal AI error: {str(e)}")
+
+    raise HTTPException(429, "Too many requests to AI. Please wait a moment and try again.")
 
 
 # ========================================================================
