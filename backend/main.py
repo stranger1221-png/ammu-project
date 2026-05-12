@@ -34,10 +34,12 @@ if not mongo_url:
     logger.error("Neither MONGO_URI nor MONGO_URL environment variable is set.")
 else:
     try:
-        client = AsyncIOMotorClient(mongo_url)
+        import certifi
+        ca = certifi.where()
+        client = AsyncIOMotorClient(mongo_url, tlsCAFile=ca)
         db_name = os.environ.get('DB_NAME', 'genvo_db')
         db = client[db_name]
-        logger.info(f"MongoDB client initialized for database: {db_name}")
+        logger.info(f"MongoDB client initialized for database: {db_name} (using certifi)")
     except Exception as e:
         logger.error(f"Failed to initialize MongoDB client: {e}")
         db = None
