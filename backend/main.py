@@ -24,19 +24,20 @@ ROOT_DIR = Path(__file__).parent
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("genvo")
 
-try:
-    mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
-    if not mongo_url:
-        logger.error("Neither MONGO_URI nor MONGO_URL environment variable is set.")
-        # We don't raise here to allow the app to boot, but endpoints will fail later
-    else:
+db = None
+mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
+
+if not mongo_url:
+    logger.error("Neither MONGO_URI nor MONGO_URL environment variable is set.")
+else:
+    try:
         client = AsyncIOMotorClient(mongo_url)
         db_name = os.environ.get('DB_NAME', 'genvo_db')
         db = client[db_name]
         logger.info(f"MongoDB client initialized for database: {db_name}")
-except Exception as e:
-    logger.error(f"Failed to initialize MongoDB client: {e}")
-    db = None
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB client: {e}")
+        db = None
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')
 GEMINI_MODEL = "gemini-1.5-flash" # Changed to a standard stable model name
