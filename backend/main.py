@@ -29,7 +29,7 @@ logger.info(f"Available Environment Keys: {list(os.environ.keys())}")
 
 db_error = None
 db = None
-mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
+mongo_url = (os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL', '')).strip()
 
 if not mongo_url:
     db_error = "MONGO_URI environment variable is missing from Vercel"
@@ -48,7 +48,7 @@ else:
         db = None
 
 # Check for API keys
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')
+GEMINI_API_KEY = (os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')).strip()
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY / EMERGENT_LLM_KEY is not set. AI features will fail.")
 else:
