@@ -243,15 +243,15 @@ def extract_json(text: str) -> dict:
 
 
 async def call_gemini(system_message: str, user_message: str, max_tokens: int = 1024) -> str:
-    """Call Google Gemini API via REST with proper system instruction support."""
+    """Call Google Gemini API via REST."""
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY is missing")
-        raise ValueError("Gemini API key not configured")
+        raise HTTPException(503, "Gemini API key not configured on server")
+
+    import asyncio
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    
-    import asyncio
-    
+
     payload = {
         "contents": [
             {
@@ -263,53 +263,71 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
             "maxOutputTokens": max_tokens,
             "temperature": 0.3,
             "topP": 0.9,
-            "topK": 40,
-            "thinkingConfig": {"thinkingBudget": 0}
+            "topK": 40
         }
     }
-    
-    max_retries = 5
+
+    # Only retry on true transient errors (429, 503) — NOT on 400/404 config errors
+    max_retries = 3
     async with httpx.AsyncClient(timeout=60.0) as client:
         for attempt in range(max_retries):
             try:
-                logger.info(f"Gemini API call attempt {attempt + 1}/{max_retries} to {GEMINI_MODEL}")
+                logger.info(f"Gemini call attempt {attempt + 1}/{max_retries} -> {GEMINI_MODEL}")
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
-                
-                if resp.status_code != 200:
-                    logger.warning(f"Gemini returned {resp.status_code}: {resp.text[:500]}")
+                logger.info(f"Gemini response status: {resp.status_code}")
 
-                # Handle transient errors (429, 500, 503, 504)
-                if resp.status_code in [429, 500, 503, 504]:
-                    wait_time = min((2 ** attempt) * 2, 30)  # Exponential, capped at 30s
-                    logger.warning(f"Gemini transient error {resp.status_code}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+                # Surface real error immediately for non-retryable failures
+                if resp.status_code in (400, 401, 403, 404):
+                    body = resp.text[:600]
+                    logger.error(f"Gemini non-retryable error {resp.status_code}: {body}")
+                    raise HTTPException(503, f"Gemini API error {resp.status_code}: {body}")
+
+                # Retry only on transient overload / rate-limit
+                if resp.status_code in (429, 500, 503, 504):
+                    wait_time = min((2 ** attempt) * 2, 20)
+                    logger.warning(f"Gemini transient {resp.status_code}, retrying in {wait_time}s")
                     await asyncio.sleep(wait_time)
                     continue
 
                 if resp.status_code != 200:
-                    raise HTTPException(503, f"Gemini API error: {resp.status_code}")
-                
+                    body = resp.text[:400]
+                    logger.error(f"Gemini unexpected status {resp.status_code}: {body}")
+                    raise HTTPException(503, f"Gemini returned {resp.status_code}: {body}")
+
                 data = resp.json()
-                
-                # Robust response parsing
+                logger.info(f"Gemini response keys: {list(data.keys())}")
+
                 if "candidates" not in data or not data["candidates"]:
-                    if "promptFeedback" in data:
-                        return "I'm sorry, I can't help with that specific request. (Prompt blocked by safety filters)"
-                    raise ValueError(f"No candidates in response: {data}")
-                
-                text_response = data["candidates"][0]["content"]["parts"][0]["text"]
-                logger.info(f"✓ Gemini success on attempt {attempt + 1}")
+                    feedback = data.get("promptFeedback", {})
+                    logger.error(f"No candidates. promptFeedback={feedback}, full={data}")
+                    if feedback:
+                        return "I'm sorry, I can't help with that request."
+                    raise HTTPException(503, f"Gemini returned no candidates: {data}")
+
+                candidate = data["candidates"][0]
+                if "content" not in candidate or not candidate["content"].get("parts"):
+                    finish = candidate.get("finishReason", "UNKNOWN")
+                    logger.error(f"No content in candidate. finishReason={finish}, candidate={candidate}")
+                    raise HTTPException(503, f"Gemini stopped with reason: {finish}")
+
+                text_response = candidate["content"]["parts"][0]["text"]
+                logger.info(f"Gemini success (attempt {attempt + 1}), length={len(text_response)}")
                 return text_response
 
             except httpx.TimeoutException:
-                if attempt < max_retries - 1: continue
-                raise HTTPException(504, "Gemini API timed out")
+                logger.warning(f"Gemini timeout on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    continue
+                raise HTTPException(504, "Gemini API timed out after 60s. Try again.")
+            except HTTPException:
+                raise
             except Exception as e:
-                if isinstance(e, HTTPException): raise
-                logger.exception("Unexpected error calling Gemini")
-                if attempt < max_retries - 1: continue
+                logger.exception(f"Unexpected error calling Gemini attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    continue
                 raise HTTPException(500, f"Internal AI error: {str(e)}")
 
-    raise HTTPException(503, "Gemini API failed after multiple retries. This might be due to temporary service issues at Google.")
+    raise HTTPException(503, "Gemini API failed after retries")
 
 
 # ========================================================================
@@ -716,7 +734,7 @@ async def transcribe_audio(req: TranscribeRequest):
                 },
             ]
         }],
-        "generationConfig": {"maxOutputTokens": 100, "temperature": 0, "thinkingConfig": {"thinkingBudget": 0}},
+        "generationConfig": {"maxOutputTokens": 100, "temperature": 0},
     }
 
     try:
