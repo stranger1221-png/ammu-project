@@ -21,15 +21,25 @@ from datetime import datetime, timezone, timedelta
 
 ROOT_DIR = Path(__file__).parent
 
-mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
-if not mongo_url:
-    raise RuntimeError("MONGO_URI or MONGO_URL must be set")
-client = AsyncIOMotorClient(mongo_url)
-db_name = os.environ.get('DB_NAME', 'genvo_db')
-db = client[db_name]
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("genvo")
+
+try:
+    mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL')
+    if not mongo_url:
+        logger.error("Neither MONGO_URI nor MONGO_URL environment variable is set.")
+        # We don't raise here to allow the app to boot, but endpoints will fail later
+    else:
+        client = AsyncIOMotorClient(mongo_url)
+        db_name = os.environ.get('DB_NAME', 'genvo_db')
+        db = client[db_name]
+        logger.info(f"MongoDB client initialized for database: {db_name}")
+except Exception as e:
+    logger.error(f"Failed to initialize MongoDB client: {e}")
+    db = None
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')
-GEMINI_MODEL = "gemini-3-flash-preview"
+GEMINI_MODEL = "gemini-1.5-flash" # Changed to a standard stable model name
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
 JWT_ALG = "HS256"
@@ -39,9 +49,6 @@ REFRESH_TTL_LONG_DAYS = 90   # refresh with "remember me"
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("genvo")
 
 
 # ========================================================================
@@ -239,6 +246,8 @@ async def call_gemini(system_message: str, user_message: str) -> str:
 
 @api_router.post("/auth/register")
 async def register(body: RegisterIn, request: Request):
+    if db is None:
+        raise HTTPException(503, "Database connection is not available. Check your MONGO_URI.")
     email = body.email.lower().strip()
     if len(body.password) < 6:
         raise HTTPException(400, "Password must be at least 6 characters")
