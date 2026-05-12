@@ -56,6 +56,16 @@ else:
 
 GEMINI_MODEL = "gemini-1.5-flash" # Changed to a standard stable model name
 
+
+JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
+JWT_ALG = "HS256"
+ACCESS_TTL_MIN = 60          # access token lifetime
+REFRESH_TTL_SHORT_DAYS = 7   # refresh without "remember me"
+REFRESH_TTL_LONG_DAYS = 90   # refresh with "remember me"
+
+app = FastAPI()
+api_router = APIRouter(prefix="/api")
+
 @api_router.get("/debug/models")
 async def debug_models():
     """Diagnostic endpoint to see what models your key can actually access."""
@@ -75,15 +85,6 @@ async def debug_models():
             except Exception as e:
                 results[url.split("/")[3]] = str(e)
     return results
-
-JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
-JWT_ALG = "HS256"
-ACCESS_TTL_MIN = 60          # access token lifetime
-REFRESH_TTL_SHORT_DAYS = 7   # refresh without "remember me"
-REFRESH_TTL_LONG_DAYS = 90   # refresh with "remember me"
-
-app = FastAPI()
-api_router = APIRouter(prefix="/api")
 
 
 # ========================================================================
