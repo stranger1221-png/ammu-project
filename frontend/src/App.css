@@ -1,0 +1,2 @@
+/* GENVO — App container hooks. Keep tiny, theming is handled inline. */
+.App { min-height: 100vh; position: relative; }
