@@ -54,7 +54,7 @@ if not GEMINI_API_KEY:
 else:
     logger.info("Gemini API key found (prefix: %s...)", GEMINI_API_KEY[:6])
 
-GEMINI_MODEL = "gemini-1.5-flash" # Changed to a standard stable model name
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
@@ -66,25 +66,6 @@ REFRESH_TTL_LONG_DAYS = 90   # refresh with "remember me"
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-@api_router.get("/debug/models")
-async def debug_models():
-    """Diagnostic endpoint to see what models your key can actually access."""
-    if not GEMINI_API_KEY:
-        return {"error": "No API key configured"}
-    
-    urls = [
-        f"https://generativelanguage.googleapis.com/v1/models?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-    ]
-    results = {}
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for url in urls:
-            try:
-                resp = await client.get(url)
-                results[url.split("/")[3]] = resp.json()
-            except Exception as e:
-                results[url.split("/")[3]] = str(e)
-    return results
 
 
 # ========================================================================
@@ -253,44 +234,28 @@ async def call_gemini(system_message: str, user_message: str) -> str:
         logger.error("GEMINI_API_KEY is missing")
         raise ValueError("Gemini API key not configured")
 
-    # Attempt multiple URL combinations as Gemini endpoints can vary by region/account
-    endpoints = [
-        f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}",
-    ]
+    # Using confirmed available model gemini-2.0-flash on v1 endpoint
+    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
         "contents": [{"role": "user", "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]}],
         "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.7}
     }
     
-    last_error = ""
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        for url in endpoints:
-            try:
-                # Mask key for logging
-                masked = url.split("key=")[0] + "key=..."
-                logger.info(f"Trying Gemini endpoint: {masked}")
-                
-                resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
-                
-                last_error = f"Status {resp.status_code}: {resp.text}"
-                logger.warning(f"Endpoint failed: {masked} -> {last_error}")
-                
-                # If it's a 400 or 403, it might be the payload or key, so don't just loop 404s
-                if resp.status_code in [400, 401, 403]:
-                    break
-            except Exception as e:
-                last_error = str(e)
-                logger.error(f"Request failed: {url.split('key=')[0]} -> {e}")
-
-    raise HTTPException(503, f"Gemini API failed after trying multiple endpoints. Last error: {last_error}")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+            if resp.status_code != 200:
+                logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
+                raise HTTPException(503, f"Gemini API error: {resp.status_code}")
+            
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+    except httpx.TimeoutException:
+        raise HTTPException(504, "Gemini API timed out")
+    except Exception as e:
+        logger.exception("Unexpected error calling Gemini")
+        raise HTTPException(500, f"Internal AI error: {str(e)}")
 
 
 # ========================================================================
@@ -677,10 +642,7 @@ async def transcribe_audio(req: TranscribeRequest):
     """Transcribe audio using Gemini multimodal API — no ffmpeg needed, works with WebM from Brave."""
     if not req.audio:
         raise HTTPException(400, "No audio data provided")
-    endpoints = [
-        f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
-    ]
+    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
         "contents": [{
@@ -703,21 +665,19 @@ async def transcribe_audio(req: TranscribeRequest):
         "generationConfig": {"maxOutputTokens": 100, "temperature": 0},
     }
 
-    last_error = ""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for url in endpoints:
-            try:
-                resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    transcript = "" if raw.upper() == "SILENT" else raw
-                    return {"ok": True, "transcript": transcript}
-                last_error = f"Status {resp.status_code}: {resp.text}"
-            except Exception as e:
-                last_error = str(e)
-
-    raise HTTPException(503, f"Transcription failed after trying multiple endpoints. Last error: {last_error}")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
+            if resp.status_code != 200:
+                logger.error("Gemini transcribe error %s: %s", resp.status_code, resp.text)
+                raise HTTPException(503, f"Gemini API error: {resp.status_code}")
+            data = resp.json()
+            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            transcript = "" if raw.upper() == "SILENT" else raw
+            return {"ok": True, "transcript": transcript}
+    except Exception as e:
+        logger.exception("transcribe failed")
+        raise HTTPException(500, f"Transcription error: {str(e)}")
 
 app.include_router(api_router)
 
