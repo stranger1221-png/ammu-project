@@ -242,18 +242,16 @@ def extract_json(text: str) -> dict:
     raise ValueError(f"Could not extract valid JSON from response. Raw text: {text[:200]}")
 
 
-async def call_gemini(system_message: str, user_message: str) -> str:
+async def call_gemini(system_message: str, user_message: str, max_tokens: int = 1024) -> str:
     """Call Google Gemini API via REST with proper system instruction support."""
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY is missing")
         raise ValueError("Gemini API key not configured")
 
-    # Switch to v1beta which is often better for experimental/preview models like 2.5
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     import asyncio
     
-    # Bundled prompt approach (Confirmed working for Story Builder earlier)
     payload = {
         "contents": [
             {
@@ -262,10 +260,11 @@ async def call_gemini(system_message: str, user_message: str) -> str:
             }
         ],
         "generationConfig": {
-            "maxOutputTokens": 800,
+            "maxOutputTokens": max_tokens,
             "temperature": 0.3,
             "topP": 0.9,
-            "topK": 40
+            "topK": 40,
+            "thinkingConfig": {"thinkingBudget": 0}
         }
     }
     
@@ -604,7 +603,7 @@ async def ai_lookup(req: LookupRequest):
         '}'
     )
     try:
-        raw = await call_gemini(system, f'Define the word: "{req.query.strip()}"')
+        raw = await call_gemini(system, f'Define the word: "{req.query.strip()}"', max_tokens=2048)
         return {"ok": True, "data": extract_json(raw)}
     except HTTPException:
         raise
@@ -697,7 +696,7 @@ async def transcribe_audio(req: TranscribeRequest):
     """Transcribe audio using Gemini multimodal API — no ffmpeg needed, works with WebM from Brave."""
     if not req.audio:
         raise HTTPException(400, "No audio data provided")
-    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
         "contents": [{
@@ -717,7 +716,7 @@ async def transcribe_audio(req: TranscribeRequest):
                 },
             ]
         }],
-        "generationConfig": {"maxOutputTokens": 100, "temperature": 0},
+        "generationConfig": {"maxOutputTokens": 100, "temperature": 0, "thinkingConfig": {"thinkingBudget": 0}},
     }
 
     try:
