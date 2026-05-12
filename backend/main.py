@@ -268,8 +268,10 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
         }
     }
 
-    # Only retry on true transient errors (429, 503) — NOT on 400/404 config errors
-    max_retries = 3
+    # Retry only on transient overload / server errors (not 400/401/403/404 — those are config/key/model issues)
+    max_retries = 4
+    last_transient_status: Optional[int] = None
+    last_transient_body: str = ""
     async with httpx.AsyncClient(timeout=60.0) as client:
         for attempt in range(max_retries):
             try:
@@ -279,16 +281,31 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
 
                 # Surface real error immediately for non-retryable failures
                 if resp.status_code in (400, 401, 403, 404):
-                    body = resp.text[:600]
+                    body = resp.text[:800]
                     logger.error(f"Gemini non-retryable error {resp.status_code}: {body}")
                     raise HTTPException(503, f"Gemini API error {resp.status_code}: {body}")
 
-                # Retry only on transient overload / rate-limit
-                if resp.status_code in (429, 500, 503, 504):
-                    wait_time = min((2 ** attempt) * 2, 20)
-                    logger.warning(f"Gemini transient {resp.status_code}, retrying in {wait_time}s")
-                    await asyncio.sleep(wait_time)
-                    continue
+                # Retry on transient overload / rate-limit / upstream errors
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last_transient_status = resp.status_code
+                    last_transient_body = (resp.text or "")[:800]
+                    wait_time = min((2 ** attempt) * 2, 25)
+                    logger.warning(
+                        "Gemini transient %s, body=%s — retry %s/%s in %ss",
+                        resp.status_code,
+                        last_transient_body[:200],
+                        attempt + 1,
+                        max_retries,
+                        wait_time,
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(wait_time)
+                        continue
+                    # Final attempt still transient: surface Google's message (quota, overload, etc.)
+                    raise HTTPException(
+                        503,
+                        f"Gemini unavailable after {max_retries} tries (HTTP {last_transient_status}): {last_transient_body}",
+                    )
 
                 if resp.status_code != 200:
                     body = resp.text[:400]
@@ -327,8 +344,6 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
                 if attempt < max_retries - 1:
                     continue
                 raise HTTPException(500, f"Internal AI error: {str(e)}")
-
-    raise HTTPException(503, "Gemini API failed after retries")
 
 
 # ========================================================================
