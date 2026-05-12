@@ -234,21 +234,17 @@ async def call_gemini(system_message: str, user_message: str) -> str:
         logger.error("GEMINI_API_KEY is missing")
         raise ValueError("Gemini API key not configured")
 
-    # Using confirmed available model gemini-2.0-flash on v1 endpoint
-    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    # Switch to v1beta which is often better for experimental/preview models like 2.5
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     import asyncio
     
-    # Modern payload structure using official system_instruction field
-    # (Recommended for Gemini 2.0/2.5 models)
+    # Bundled prompt approach (Confirmed working for Story Builder earlier)
     payload = {
-        "system_instruction": {
-            "parts": [{"text": system_message}]
-        },
         "contents": [
             {
                 "role": "user",
-                "parts": [{"text": user_message}]
+                "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]
             }
         ],
         "generationConfig": {
@@ -263,16 +259,6 @@ async def call_gemini(system_message: str, user_message: str) -> str:
             try:
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
                 
-                # If the model doesn't support system_instruction (returns 400), 
-                # fallback to the role-based prompt
-                if resp.status_code == 400 and "system_instruction" in resp.text:
-                    logger.warning("Model does not support system_instruction, falling back to role-prefix")
-                    legacy_payload = {
-                        "contents": [{"role": "user", "parts": [{"text": f"SYSTEM: {system_message}\n\nUSER: {user_message}"}]}],
-                        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.7}
-                    }
-                    resp = await client.post(url, headers={"Content-Type": "application/json"}, json=legacy_payload)
-
                 # Handle transient errors (429, 500, 503, 504)
                 if resp.status_code in [429, 500, 503, 504]:
                     wait_time = (attempt + 1) * 5
@@ -290,7 +276,7 @@ async def call_gemini(system_message: str, user_message: str) -> str:
                 if "candidates" not in data or not data["candidates"]:
                     if "promptFeedback" in data:
                         return "I'm sorry, I can't help with that specific request. (Prompt blocked by safety filters)"
-                    raise ValueError("No candidates in response")
+                    raise ValueError(f"No candidates in response: {data}")
                 
                 return data["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -303,7 +289,7 @@ async def call_gemini(system_message: str, user_message: str) -> str:
                 if attempt < max_retries - 1: continue
                 raise HTTPException(500, f"Internal AI error: {str(e)}")
 
-    raise HTTPException(503, "Gemini API failed after multiple retries.")
+    raise HTTPException(503, "Gemini API failed after multiple retries. This might be due to temporary service issues at Google.")
 
 
 # ========================================================================
