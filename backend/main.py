@@ -54,7 +54,7 @@ if not GEMINI_API_KEY:
 else:
     logger.info("Gemini API key found (prefix: %s...)", GEMINI_API_KEY[:6])
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.0-flash-lite"
 
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
@@ -243,14 +243,14 @@ async def call_gemini(system_message: str, user_message: str) -> str:
     }
     
     import asyncio
-    max_retries = 3
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
                 
                 if resp.status_code == 429:
-                    wait_time = (attempt + 1) * 2
+                    wait_time = (attempt + 1) * 5 # Wait longer: 5s, 10s, 15s...
                     logger.warning(f"Rate limited (429). Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
                     await asyncio.sleep(wait_time)
                     continue
