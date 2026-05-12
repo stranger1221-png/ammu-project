@@ -2,10 +2,7 @@
 // cloud sync of progress + custom words + theme.
 
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
-import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "/_/backend";
-export const API = `${BACKEND_URL}/api`;
+import { api, API_BASE as API } from "./api-client";
 
 const AuthCtx = createContext(null);
 
@@ -23,50 +20,6 @@ const writeToken = (k, v) => {
     else localStorage.removeItem(k);
   } catch (e) {}
 };
-
-// Standalone axios instance with auto-refresh interceptor.
-export const api = axios.create({ baseURL: API });
-
-api.interceptors.request.use((config) => {
-  const t = readToken(TOKEN_KEYS.access);
-  if (t) config.headers.Authorization = `Bearer ${t}`;
-  return config;
-});
-
-let refreshing = null;
-const tryRefresh = async () => {
-  const refresh = readToken(TOKEN_KEYS.refresh);
-  if (!refresh) throw new Error("no refresh token");
-  if (!refreshing) {
-    refreshing = axios
-      .post(`${API}/auth/refresh`, { refresh_token: refresh })
-      .then((r) => {
-        writeToken(TOKEN_KEYS.access, r.data.access_token);
-        return r.data.access_token;
-      })
-      .finally(() => { refreshing = null; });
-  }
-  return refreshing;
-};
-
-api.interceptors.response.use(
-  (r) => r,
-  async (err) => {
-    const original = err.config || {};
-    if (err.response?.status === 401 && !original._retry && readToken(TOKEN_KEYS.refresh)) {
-      original._retry = true;
-      try {
-        const newAccess = await tryRefresh();
-        original.headers = original.headers || {};
-        original.headers.Authorization = `Bearer ${newAccess}`;
-        return api(original);
-      } catch (e) {
-        // fall through — caller will get 401
-      }
-    }
-    return Promise.reject(err);
-  }
-);
 
 export const formatApiError = (detail) => {
   if (detail == null) return "Something went wrong. Please try again.";

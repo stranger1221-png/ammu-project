@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { speak } from "../../lib/helpers";
 import { WordExplanationBlock } from "./Modals";
-import { API } from "../../lib/ai";
+import { api } from "../../lib/api-client";
 
 // ── Levenshtein score ──
 const calcLevenshteinScore = (spoken, target) => {
@@ -184,13 +184,8 @@ export default function PronunciationCheck({
       const base64Audio = await blobToBase64(blob);
 
       // Step 3: Send to backend for Gemini-powered transcription
-      const res = await fetch(`${API}/transcribe`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio: base64Audio, mimeType }),
-      });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const json = await res.json();
+      const res = await api.post("/transcribe", { audio: base64Audio, mimeType });
+      const json = res.data;
       const bestTranscript = (json.transcript || "").trim();
 
       const bestScore = calcLevenshteinScore(bestTranscript, word.word);

@@ -221,32 +221,59 @@ def extract_json(text: str) -> dict:
 
 
 async def call_gemini(system_message: str, user_message: str) -> str:
-    """Call Google Gemini API via REST."""
+    """Call Google Gemini API via REST with proper system instruction support."""
+    if not GEMINI_API_KEY:
+        logger.error("GEMINI_API_KEY is missing")
+        raise ValueError("Gemini API key not configured")
+
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [
-                    {"role": "user", "parts": [{"text": f"SYSTEM INSTRUCTIONS: {system_message}"}]},
-                    {"role": "model", "parts": [{"text": "Understood. I will follow these instructions exactly."}]},
-                    {"role": "user", "parts": [{"text": user_message}]}
-                ],
-                "generationConfig": {
-                    "maxOutputTokens": 8192,
-                    "temperature": 0.7
-                }
-            },
-        )
-        if resp.status_code != 200:
-            resp.raise_for_status()
-        data = resp.json()
-        try:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError):
-            logger.error(f"Unexpected Gemini response: {data}")
-            raise ValueError("Failed to parse Gemini response")
+    
+    # Use official system_instruction field for better reliability
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": system_message}]
+        },
+        "contents": [
+            {"role": "user", "parts": [{"text": user_message}]}
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 8192,
+            "temperature": 0.7
+        }
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+            
+            if resp.status_code != 200:
+                logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
+                raise HTTPException(503, f"Gemini API error: {resp.status_code}")
+                
+            data = resp.json()
+            try:
+                # Check for candidates and content
+                if "candidates" not in data or not data["candidates"]:
+                    if "promptFeedback" in data:
+                        logger.warning(f"Gemini blocked prompt: {data['promptFeedback']}")
+                        return "I'm sorry, I can't help with that specific request. (Prompt blocked by safety filters)"
+                    logger.error(f"No candidates in Gemini response: {data}")
+                    raise ValueError("No response from AI")
+                    
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError) as e:
+                logger.error(f"Failed to parse Gemini response: {e}. Data: {data}")
+                raise ValueError("Failed to parse Gemini response")
+    except httpx.TimeoutException:
+        logger.error("Gemini API timed out")
+        raise HTTPException(504, "Gemini API timed out")
+    except Exception as e:
+        logger.exception("Unexpected error calling Gemini")
+        raise HTTPException(500, f"Internal AI error: {str(e)}")
 
 
 # ========================================================================
@@ -675,13 +702,17 @@ async def transcribe_audio(req: TranscribeRequest):
         logger.exception("transcribe failed")
         raise HTTPException(500, f"Transcription error: {e}")
 
-
 app.include_router(api_router)
+
+# Robust CORS setup
+cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
+allow_all = "*" in cors_origins
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=[] if allow_all else cors_origins,
+    allow_origin_regex=".*" if allow_all else None,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
