@@ -243,6 +243,18 @@ def extract_json(text: str) -> dict:
     raise ValueError(f"Could not extract valid JSON from response. Raw text: {text[:200]}")
 
 
+def _gemini_backoff_seconds(status_code: int, response_body: str, attempt: int) -> float:
+    """Wait before retrying. For 429, honor Google's 'Please retry in Xs' when present (often > our exponential backoff)."""
+    base = float(min((2**attempt) * 2, 25))
+    if status_code != 429:
+        return base
+    m = re.search(r"Please retry in ([\d.]+)\s*s", response_body or "", re.I)
+    if m:
+        suggested = float(m.group(1))
+        return min(max(suggested, base), 90.0)
+    return base
+
+
 async def call_gemini(system_message: str, user_message: str, max_tokens: int = 1024) -> str:
     """Call Google Gemini API via REST."""
     if not GEMINI_API_KEY:
@@ -289,9 +301,9 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
                 if resp.status_code in (429, 500, 502, 503, 504):
                     last_transient_status = resp.status_code
                     last_transient_body = (resp.text or "")[:800]
-                    wait_time = min((2 ** attempt) * 2, 25)
+                    wait_time = _gemini_backoff_seconds(resp.status_code, last_transient_body, attempt)
                     logger.warning(
-                        "Gemini transient %s, body=%s — retry %s/%s in %ss",
+                        "Gemini transient %s, body=%s — retry %s/%s in %.1fs",
                         resp.status_code,
                         last_transient_body[:200],
                         attempt + 1,
@@ -302,6 +314,14 @@ async def call_gemini(system_message: str, user_message: str, max_tokens: int = 
                         await asyncio.sleep(wait_time)
                         continue
                     # Final attempt still transient: surface Google's message (quota, overload, etc.)
+                    if last_transient_status == 429 and "quota" in last_transient_body.lower():
+                        raise HTTPException(
+                            429,
+                            "Gemini API rate limit or free-tier quota exceeded. "
+                            "Wait a minute, reduce how often you call AI, enable billing for higher limits, "
+                            "or set GEMINI_MODEL to another model (e.g. gemini-2.0-flash) for a separate quota pool. "
+                            f"Details: {last_transient_body[:600]}",
+                        )
                     raise HTTPException(
                         503,
                         f"Gemini unavailable after {max_retries} tries (HTTP {last_transient_status}): {last_transient_body}",
