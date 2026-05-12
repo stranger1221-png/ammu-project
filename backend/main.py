@@ -256,6 +256,18 @@ async def call_gemini(system_message: str, user_message: str) -> str:
                 json=payload,
             )
             
+            # If 404, try falling back to gemini-pro (for older keys or restricted regions)
+            if resp.status_code == 404 and GEMINI_MODEL != "gemini-pro":
+                logger.warning(f"Model {GEMINI_MODEL} not found, falling back to gemini-pro")
+                fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+                # gemini-pro doesn't support system_instruction in some v1beta versions, use role hack
+                fallback_payload = {
+                    "contents": [
+                        {"role": "user", "parts": [{"text": f"SYSTEM: {system_message}\n\nUSER: {user_message}"}]}
+                    ]
+                }
+                resp = await client.post(fallback_url, headers={"Content-Type": "application/json"}, json=fallback_payload)
+
             if resp.status_code != 200:
                 logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
                 raise HTTPException(503, f"Gemini API error: {resp.status_code}")
