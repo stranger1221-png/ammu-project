@@ -232,18 +232,22 @@ async def call_gemini(system_message: str, user_message: str) -> str:
         logger.error("GEMINI_API_KEY is missing")
         raise ValueError("Gemini API key not configured")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    # Using v1 endpoint instead of v1beta for better stability
+    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
-    # Use official system_instruction field for better reliability
+    # Mask key for logging
+    masked_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY[:4]}...{GEMINI_API_KEY[-4:]}" if len(GEMINI_API_KEY) > 8 else "URL-with-short-key"
+    logger.info(f"Calling Gemini API: {masked_url}")
+
     payload = {
-        "system_instruction": {
-            "parts": [{"text": system_message}]
-        },
         "contents": [
-            {"role": "user", "parts": [{"text": user_message}]}
+            {
+                "role": "user",
+                "parts": [{"text": f"INSTRUCTIONS: {system_message}\n\nUSER REQUEST: {user_message}"}]
+            }
         ],
         "generationConfig": {
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": 2048,
             "temperature": 0.7
         }
     }
@@ -256,20 +260,17 @@ async def call_gemini(system_message: str, user_message: str) -> str:
                 json=payload,
             )
             
-            # If 404, try falling back to gemini-pro (for older keys or restricted regions)
+            # If 404, try falling back to gemini-pro on v1
             if resp.status_code == 404 and GEMINI_MODEL != "gemini-pro":
-                logger.warning(f"Model {GEMINI_MODEL} not found, falling back to gemini-pro")
-                fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-                # gemini-pro doesn't support system_instruction in some v1beta versions, use role hack
-                fallback_payload = {
-                    "contents": [
-                        {"role": "user", "parts": [{"text": f"SYSTEM: {system_message}\n\nUSER: {user_message}"}]}
-                    ]
-                }
-                resp = await client.post(fallback_url, headers={"Content-Type": "application/json"}, json=fallback_payload)
+                logger.warning(f"Model {GEMINI_MODEL} not found on v1, trying gemini-pro fallback")
+                fallback_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+                resp = await client.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload)
 
             if resp.status_code != 200:
                 logger.error(f"Gemini API error {resp.status_code}: {resp.text}")
+                # If it's still 404, the API key might be the issue or the endpoint version
+                if resp.status_code == 404:
+                    raise HTTPException(503, f"Gemini API endpoint not found (404). Check if your API key has access to v1/models/{GEMINI_MODEL}")
                 raise HTTPException(503, f"Gemini API error: {resp.status_code}")
                 
             data = resp.json()
@@ -682,7 +683,7 @@ async def transcribe_audio(req: TranscribeRequest):
         raise HTTPException(500, "Gemini API key not configured")
 
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"https://generativelanguage.googleapis.com/v1/models/"
         f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
     payload = {
