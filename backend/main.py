@@ -47,7 +47,13 @@ else:
         logger.error(f"Failed to initialize MongoDB client: {e}")
         db = None
 
+# Check for API keys
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')
+if not GEMINI_API_KEY:
+    logger.warning("GEMINI_API_KEY / EMERGENT_LLM_KEY is not set. AI features will fail.")
+else:
+    logger.info("Gemini API key found (prefix: %s...)", GEMINI_API_KEY[:6])
+
 GEMINI_MODEL = "gemini-1.5-flash" # Changed to a standard stable model name
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me-in-production')
@@ -569,9 +575,11 @@ async def ai_lookup(req: LookupRequest):
     try:
         raw = await call_gemini(system, f'Define the word: "{req.query.strip()}"')
         return {"ok": True, "data": extract_json(raw)}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("ai_lookup failed")
-        raise HTTPException(500, f"AI lookup failed: {e}")
+        raise HTTPException(500, f"AI lookup failed: {str(e)}")
 
 
 @api_router.post("/ai/story")
@@ -614,9 +622,11 @@ async def ai_story(req: StoryRequest):
                     })
         word_count = len(re.findall(r"\b[\w']+\b", story_text))
         return {"ok": True, "story": story_text, "vocab": vocab_list, "word_count": word_count}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("ai_story failed")
-        raise HTTPException(500, f"AI story failed: {e}")
+        raise HTTPException(500, f"AI story failed: {str(e)}")
 
 
 @api_router.post("/ai/tutor")
@@ -635,9 +645,11 @@ async def ai_tutor(req: TutorRequest):
     try:
         reply = await call_gemini(system, user_msg)
         return {"ok": True, "reply": reply.strip()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("ai_tutor failed")
-        raise HTTPException(500, f"AI tutor failed: {e}")
+        raise HTTPException(500, f"AI tutor failed: {str(e)}")
 
 
 # ========================================================================
